@@ -543,6 +543,14 @@ struct st_quicly_conn_streamgroup_state_t {
          * Total number of acked packets that were sent on promoted.                                                               \
          */                                                                                                                        \
         uint64_t ack_received_promoted_paths;                                                                                      \
+        /**                                                                                                                        \
+         * Maximum number of packets that were buffered to delay their processing due to being undecryptable.                      \
+         */                                                                                                                        \
+        uint64_t max_delayed;                                                                                                      \
+        /**                                                                                                                        \
+         * Number of packets that were delayed processing and successfully used.                                                   \
+         */                                                                                                                        \
+        uint64_t delayed_used;                                                                                                     \
     } num_packets;                                                                                                                 \
     struct {                                                                                                                       \
         /**                                                                                                                        \
@@ -577,7 +585,7 @@ struct st_quicly_conn_streamgroup_state_t {
         uint64_t padding, ping, ack, reset_stream, stop_sending, crypto, new_token, stream, max_data, max_stream_data,             \
             max_streams_bidi, max_streams_uni, data_blocked, stream_data_blocked, streams_blocked, new_connection_id,              \
             retire_connection_id, path_challenge, path_response, transport_close, application_close, handshake_done, datagram,     \
-            ack_frequency;                                                                                                         \
+            ack_frequency, immediate_ack;                                                                                          \
     } num_frames_received, num_frames_sent;                                                                                        \
     struct {                                                                                                                       \
         /**                                                                                                                        \
@@ -730,7 +738,9 @@ typedef struct st_quicly_stats_t {
     apply(num_packets.acked_ecn_counts[1], "num-packets.acked-ecn-ect1")                                                           \
     apply(num_packets.acked_ecn_counts[2], "num-packets.acked-ecn-ce")                                                             \
     apply(num_packets.sent_promoted_paths, "num-packets.sent-promoted-paths")                                                      \
-    apply(num_packets.ack_received_promoted_paths, "num-packets.ack-received-promoted-paths")
+    apply(num_packets.ack_received_promoted_paths, "num-packets.ack-received-promoted-paths")                                      \
+    apply(num_packets.max_delayed, "num-packets.max-delayed")                                                                      \
+    apply(num_packets.delayed_used, "num-packets.delayed-used")
 
 #define QUICLY_STATS_FOREACH_NUM_BYTES(apply)                                                                                      \
     apply(num_bytes.received, "num-bytes.received")                                                                                \
@@ -767,7 +777,8 @@ typedef struct st_quicly_stats_t {
     QUICLY_STATS__DO_FOREACH_NUM_FRAMES(application_close, dir, apply)                                                             \
     QUICLY_STATS__DO_FOREACH_NUM_FRAMES(handshake_done, dir, apply)                                                                \
     QUICLY_STATS__DO_FOREACH_NUM_FRAMES(datagram, dir, apply)                                                                      \
-    QUICLY_STATS__DO_FOREACH_NUM_FRAMES(ack_frequency, dir, apply)
+    QUICLY_STATS__DO_FOREACH_NUM_FRAMES(ack_frequency, dir, apply)                                                                 \
+    QUICLY_STATS__DO_FOREACH_NUM_FRAMES(immediate_ack, dir, apply)
 
 #define QUICLY_STATS_FOREACH_TRANSPORT_COUNTERS(apply)                                                                             \
     apply(num_paths.created, "num-paths.created")                                                                                  \
@@ -883,8 +894,8 @@ struct _st_quicly_conn_public_t {
         } address_validation;
     } remote;
     /**
-     * Retains the original DCID used by the client. Servers use this to route incoming packets. Clients use this when validating the
-     * Transport Parameters sent by the server.
+     * Retains the original DCID used by the client. Servers use this to route incoming packets. Clients use this when validating
+     * the Transport Parameters sent by the server.
      */
     quicly_cid_t original_dcid;
     struct st_quicly_default_scheduler_state_t _default_scheduler;
@@ -1044,6 +1055,10 @@ struct st_quicly_stream_t {
     } _recv_aux;
 };
 
+/**
+ * QUIC packet after decoded by `quicly_decode_packet` for routing. All the pointers within the struct points to the buffer pointed
+ * to by `.octets`. When adding new pointer members, `adjust_pointers_of_decoded_packet` must be updated as well.
+ */
 typedef struct st_quicly_decoded_packet_t {
     /**
      * octets of the entire packet
